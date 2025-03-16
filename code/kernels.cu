@@ -125,3 +125,52 @@ __global__ void updateVMatrix(double* V, double* u, int n, int k, int ldV) {
         }
     }
 }
+
+__global__ void initZerosKernel(double* matrix, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        matrix[idx] = 0.0;
+    }
+}
+
+__global__ void copyColumn(double* src, double* dst, int m_src, int m_dst, int src_col, int dst_col, int ld_src, int ld_dst) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (i < m_src) {
+        dst[i * ld_dst + dst_col] = src[i * ld_src + src_col];
+    }
+}
+
+__global__ void copyRow(double* src, double* dst, int n_src, int n_dst, int src_row, int dst_row, int ld_src, int ld_dst) {
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (j < n_src) {
+        dst[dst_row * ld_dst + j] = src[src_row * ld_src + j];
+    }
+}
+
+__global__ void extractColumn(double* A, double* x, int m, int n, int col, int startRow, int ldA) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i < m - startRow) {
+        x[i] = A[(i + startRow) * ldA + col];
+    }
+}
+
+__global__ void extractRow(double* A, double* x, int m, int n, int row, int startCol, int ldA) {
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (j < n - startCol) {
+        x[j] = A[row * ldA + (j + startCol)];
+    }
+}
+
+__global__ void initIdentityMatrix(double* M, int dim, int ldM) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i < dim) {
+        for (int j = 0; j < dim; ++j) {
+            M[i * ldM + j] = (i == j) ? 1.0 : 0.0;
+        }
+    }
+}

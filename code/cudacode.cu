@@ -5,6 +5,7 @@
 #include <cuda.h>
 
 // #define N 10
+#define EPSILON 1e-9 
 
 using namespace std;
 
@@ -21,6 +22,18 @@ extern __global__ void updateUMatrix(double* U, double* u, int m, int k, int ldU
 extern __global__ void applyHouseholderToRows(double* A, double* u, int m, int n, int k, int ldA);
 
 extern __global__ void updateVMatrix(double* V, double* u, int n, int k, int ldV);
+
+extern __global__ void initZerosKernel(double* matrix, int size);
+
+extern __global__ void copyColumn(double* src, double* dst, int m_src, int m_dst, int src_col, int dst_col, int ld_src, int ld_dst);
+
+extern __global__ void copyRow(double* src, double* dst, int n_src, int n_dst, int src_row, int dst_row, int ld_src, int ld_dst);
+
+extern __global__ void extractColumn(double* A, double* x, int m, int n, int col, int startRow, int ldA);
+
+extern __global__ void extractRow(double* A, double* x, int m, int n, int row, int startCol, int ldA);
+
+extern __global__ void initIdentityMatrix(double* M, int dim, int ldM);
 
 double frobeniusNormCUDA(double* d_tensor, int total_size) {
 
@@ -60,35 +73,6 @@ void matrixMultiplyCUDA(double* d_A, double* d_B, double* d_C, int m, int k, int
     }
 }
 
-
-
-__global__ void extractColumn(double* A, double* x, int m, int n, int col, int startRow, int ldA) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (i < m - startRow) {
-        x[i] = A[(i + startRow) * ldA + col];
-    }
-}
-
-__global__ void extractRow(double* A, double* x, int m, int n, int row, int startCol, int ldA) {
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (j < n - startCol) {
-        x[j] = A[row * ldA + (j + startCol)];
-    }
-}
-
-__global__ void initIdentityMatrix(double* M, int dim, int ldM) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (i < dim) {
-        for (int j = 0; j < dim; ++j) {
-            M[i * ldM + j] = (i == j) ? 1.0 : 0.0;
-        }
-    }
-}
-
-
 void householderBidiagonalizationCUDA(double* d_A, double* d_U, double* d_V, int m, int n, int ldA, int ldU, int ldV) {
 
     double* d_u;
@@ -106,22 +90,12 @@ void householderBidiagonalizationCUDA(double* d_A, double* d_U, double* d_V, int
         printf("CUDA Error: %s\n", cudaGetErrorString(error));
     }
     initIdentityMatrix<<<(n + 255) / 256, 256>>>(d_V, n, ldV);
-    // error = cudaGetLastError();
-    // if (error != cudaSuccess) {
-    //     printf("CUDA Error: %s\n", cudaGetErrorString(error));
-    //     // Handle error
-    // }
 
-    // Define block size for kernels
     int blockSize = 256;
 
     for (int k = 0; k < min(m, n); ++k) {
         extractColumn<<<(m-k + 255) / 256, 256>>>(d_A, d_x, m, n, k, k, ldA);
-        // error = cudaGetLastError();
-        // if (error != cudaSuccess) {
-        //     printf("CUDA Error: %s\n", cudaGetErrorString(error));
-        //     // Handle error
-        // }
+
         cudaMemcpy(h_x, d_x, (m-k) * sizeof(double), cudaMemcpyDeviceToHost);
 
         double norm_x = 0.0;
@@ -151,18 +125,10 @@ void householderBidiagonalizationCUDA(double* d_A, double* d_U, double* d_V, int
 
             int numBlocksCol = (n - k + blockSize - 1) / blockSize;
             applyHouseholderToColumns<<<numBlocksCol, blockSize>>>(d_A, d_u, m, n, k, ldA);
-            // error = cudaGetLastError();
-            // if (error != cudaSuccess) {
-            //     printf("CUDA Error: %s\n", cudaGetErrorString(error));
-            //     // Handle error
-            // }
+
             int numBlocksU = (m + blockSize - 1) / blockSize;
             updateUMatrix<<<numBlocksU, blockSize>>>(d_U, d_u, m, k, ldU);
-            // error = cudaGetLastError();
-            // if (error != cudaSuccess) {
-            //     printf("CUDA Error: %s\n", cudaGetErrorString(error));
-            //     // Handle error
-            // }
+
         }
 
         if (k < n - 1) {
@@ -218,12 +184,7 @@ __global__ void extractSingularValuesKernel(double* B, double* Sigma, int m, int
     }
 }
 
-__global__ void initZerosKernel(double* matrix, int size) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < size) {
-        matrix[idx] = 0.0;
-    }
-}
+
 
 void extractSingularValuesCUDA(double* d_B, double* d_Sigma, int m, int n, int ldB, int ldSigma) {
     int min_mn = (m < n) ? m : n;
@@ -241,23 +202,7 @@ void reshapeTensorCUDA(double* d_input, double* d_output, int mode, int N, int t
     cudaMemcpy(d_output, d_input, total_size * sizeof(double), cudaMemcpyDeviceToDevice);
 }
 
-__global__ void copyColumn(double* src, double* dst, int m_src, int m_dst, 
-                          int src_col, int dst_col, int ld_src, int ld_dst) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (i < m_src) {
-        dst[i * ld_dst + dst_col] = src[i * ld_src + src_col];
-    }
-}
 
-__global__ void copyRow(double* src, double* dst, int n_src, int n_dst, 
-                       int src_row, int dst_row, int ld_src, int ld_dst) {
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (j < n_src) {
-        dst[dst_row * ld_dst + j] = src[src_row * ld_src + j];
-    }
-}
 
 __global__ void setDiagonalElement(double* matrix, double value, int ld, int idx) {
     matrix[idx * ld + idx] = value;
@@ -365,194 +310,242 @@ void deltaTruncatedSVDCUDA(double* d_A, double* d_U, double* d_S, double* d_V,
 }
 
 
-int main() {
-
-    int m = 8;
-    int n = 8;
-    
-
-    double* h_A = new double[m * n];
-
-    std::mt19937 gen(42);
-    std::normal_distribution<double> dist(0.0, 1.0);
-    for (int i = 0; i < m * n; i++) {
-        h_A[i] = dist(gen);
-    }
-    
-
-    double *d_A, *d_U, *d_S, *d_V;
-    cudaMalloc(&d_A, m * n * sizeof(double));
-    cudaMalloc(&d_U, m * m * sizeof(double));
-    cudaMalloc(&d_S, m * n * sizeof(double));
-    cudaMalloc(&d_V, n * n * sizeof(double));
-    
-
-    double *d_U_trunc, *d_S_trunc, *d_V_trunc;
-    cudaMalloc(&d_U_trunc, m * m * sizeof(double));
-    cudaMalloc(&d_S_trunc, m * n * sizeof(double));
-    cudaMalloc(&d_V_trunc, n * n * sizeof(double));
-    
-    cudaMemcpy(d_A, h_A, m * n * sizeof(double), cudaMemcpyHostToDevice);
-
-    double delta = 0.5;
-
-    int rank;
-    int* d_rank;
-    cudaMalloc(&d_rank, sizeof(int));
-
-    std::cout << "Running delta-truncated SVD..." << std::endl;
-    deltaTruncatedSVDCUDA(d_A, d_U, d_S, d_V, d_U_trunc, d_S_trunc, d_V_trunc, m, n, delta, d_rank);
-    
-    cudaMemcpy(&rank, d_rank, sizeof(int), cudaMemcpyDeviceToHost);
-    std::cout << "Truncated rank: " << rank << std::endl;
-    
-    double* h_S_trunc = new double[rank];
-    cudaMemcpy(h_S_trunc, d_S_trunc, rank * sizeof(double), cudaMemcpyDeviceToHost);
-    
-    std::cout << "Truncated singular values: ";
-    for (int i = 0; i < rank; i++) {
-        std::cout << h_S_trunc[i] << " ";
-    }
-    std::cout << std::endl;
-    
-    bool all_above_delta = true;
-    for (int i = 0; i < rank; i++) {
-        if (h_S_trunc[i] <= delta) {
-            all_above_delta = false;
-            break;
-        }
-    }
-    std::cout << "All singular values above delta: " << (all_above_delta ? "Yes" : "No") << std::endl;
-    
-    // Clean up
-    delete[] h_A;
-    delete[] h_S_trunc;
-    
-    cudaFree(d_A);
-    cudaFree(d_U);
-    cudaFree(d_S);
-    cudaFree(d_V);
-    cudaFree(d_U_trunc);
-    cudaFree(d_S_trunc);
-    cudaFree(d_V_trunc);
-    cudaFree(d_rank);
-    
-    return 0;
-}
-
 // int main() {
-//     // Small 5D tensor (2x2x2x2x2)
-//     const int N = 2;
-//     const int total_size = N * N * N * N * N; // 32 elements
+
+//     int m = 8;
+//     int n = 8;
     
-//     // Create and initialize tensor on host
-//     double* h_tensor = new double[total_size];
-//     mt19937 gen(42); // Fixed seed for reproducibility
-//     normal_distribution<double> dist(0.0, 1.0);
-    
-//     for (int i = 0; i < total_size; i++) {
-//         h_tensor[i] = dist(gen);
+
+//     double* h_A = new double[m * n];
+
+//     std::mt19937 gen(42);
+//     std::normal_distribution<double> dist(0.0, 1.0);
+//     for (int i = 0; i < m * n; i++) {
+//         h_A[i] = dist(gen);
 //     }
     
-//     // Mode-1 unfolding: (2, 16)
-//     int m = N;
-//     int n = N * N * N * N;
-    
-//     // Print original matrix (first few elements)
-//     cout << "Original matrix (first few elements):" << endl;
-//     for (int i = 0; i < m; i++) {
-//         for (int j = 0; j < min(5, n); j++) {
-//             cout << fixed << setprecision(4) << h_tensor[i * n + j] << " ";
-//         }
-//         cout << endl;
-//     }
-    
-//     // Make a copy of the original for verification
-//     double* h_A_copy = new double[m * n];
-//     memcpy(h_A_copy, h_tensor, m * n * sizeof(double));
-    
-//     // Allocate device memory
-//     double *d_A, *d_U, *d_V;
+
+//     double *d_A, *d_U, *d_S, *d_V;
 //     cudaMalloc(&d_A, m * n * sizeof(double));
 //     cudaMalloc(&d_U, m * m * sizeof(double));
+//     cudaMalloc(&d_S, m * n * sizeof(double));
 //     cudaMalloc(&d_V, n * n * sizeof(double));
     
-//     // Copy data to device
-//     cudaMemcpy(d_A, h_tensor, m * n * sizeof(double), cudaMemcpyHostToDevice);
-    
-//     // Run bidiagonalization
-//     householderBidiagonalizationCUDA(d_A, d_U, d_V, m, n, n, m, n);
-    
-//     // Copy results back
-//     double* h_result = new double[m * n];
-//     double* h_U = new double[m * m];
-//     double* h_V = new double[n * n];
-    
-//     cudaMemcpy(h_result, d_A, m * n * sizeof(double), cudaMemcpyDeviceToHost);
-//     cudaMemcpy(h_U, d_U, m * m * sizeof(double), cudaMemcpyDeviceToHost);
-//     cudaMemcpy(h_V, d_V, n * n * sizeof(double), cudaMemcpyDeviceToHost);
-     
-//     // Print bidiagonal matrix (should only have nonzeros on diagonal and superdiagonal)
-//     cout << "\nBidiagonal matrix result:" << endl;
-//     for (int i = 0; i < m; i++) {
-//         for (int j = 0; j < min(5, n); j++) {
-//             cout << fixed << setprecision(4) << h_result[i * n + j] << " ";
-//         }
-//         cout << endl;
-//     }
 
-//     int min_mn = min(m,n);
-//     double *Sigma = new double[min_mn*min_mn];
+//     double *d_U_trunc, *d_S_trunc, *d_V_trunc;
+//     cudaMalloc(&d_U_trunc, m * m * sizeof(double));
+//     cudaMalloc(&d_S_trunc, m * n * sizeof(double));
+//     cudaMalloc(&d_V_trunc, n * n * sizeof(double));
+    
+//     cudaMemcpy(d_A, h_A, m * n * sizeof(double), cudaMemcpyHostToDevice);
 
-//     for(int i=0;i<min_mn;i++)
-//     {
-//         for(int j=0;j<min_mn;j++)
-//         {
-//             Sigma[i*min_mn + j] = fabs(h_result[i*n + j]);
-//         }
-//     }
+//     double delta = 0.5;
 
+//     int rank;
+//     int* d_rank;
+//     cudaMalloc(&d_rank, sizeof(int));
+
+//     std::cout << "Running delta-truncated SVD..." << std::endl;
+//     deltaTruncatedSVDCUDA(d_A, d_U, d_S, d_V, d_U_trunc, d_S_trunc, d_V_trunc, m, n, delta, d_rank);
     
-//     // Verify U is orthogonal by checking U*U^T
-//     cout << "\nVerifying U is orthogonal (U*U^T):" << endl;
-//     for (int i = 0; i < m; i++) {
-//         for (int j = 0; j < m; j++) {
-//             double sum = 0.0;
-//             for (int k = 0; k < m; k++) {
-//                 sum += h_U[i * m + k] * h_U[j * m + k];
-//             }
-//             cout << fixed << setprecision(4) << sum << " ";
-//         }
-//         cout << endl;
-//     }
+//     cudaMemcpy(&rank, d_rank, sizeof(int), cudaMemcpyDeviceToHost);
+//     std::cout << "Truncated rank: " << rank << std::endl;
     
-//     // Print part of U matrix
-//     cout << "\nU matrix:" << endl;
-//     for (int i = 0; i < m; i++) {
-//         for (int j = 0; j < m; j++) {
-//             cout << fixed << setprecision(4) << h_U[i * m + j] << " ";
-//         }
-//         cout << endl;
-//     }
+//     double* h_S_trunc = new double[rank];
+//     cudaMemcpy(h_S_trunc, d_S_trunc, rank * sizeof(double), cudaMemcpyDeviceToHost);
     
-//     // Print part of V matrix (just first few columns)
-//     cout << "\nV matrix (first few columns):" << endl;
-//     for (int i = 0; i < min(3, n); i++) {
-//         for (int j = 0; j < min(3, n); j++) {
-//             cout << fixed << setprecision(4) << h_V[i * n + j] << " ";
-//         }
-//         cout << endl;
+//     std::cout << "Truncated singular values: ";
+//     for (int i = 0; i < rank; i++) {
+//         std::cout << h_S_trunc[i] << " ";
 //     }
+//     std::cout << std::endl;
+    
+//     bool all_above_delta = true;
+//     for (int i = 0; i < rank; i++) {
+//         if (h_S_trunc[i] <= delta) {
+//             all_above_delta = false;
+//             break;
+//         }
+//     }
+//     std::cout << "All singular values above delta: " << (all_above_delta ? "Yes" : "No") << std::endl;
     
 //     // Clean up
-//     delete[] h_tensor;
-//     delete[] h_A_copy;
-//     delete[] h_result;
-//     delete[] h_U;
-//     delete[] h_V;
+//     delete[] h_A;
+//     delete[] h_S_trunc;
+    
 //     cudaFree(d_A);
 //     cudaFree(d_U);
+//     cudaFree(d_S);
 //     cudaFree(d_V);
+//     cudaFree(d_U_trunc);
+//     cudaFree(d_S_trunc);
+//     cudaFree(d_V_trunc);
+//     cudaFree(d_rank);
     
 //     return 0;
 // }
+
+void compute_singular_values(double *d, double *e, int n, vector<double> &singular_values) {
+    for (int i = 0; i < n; i++) {
+        singular_values[i] = fabs(d[i]); // Initial guess: diagonal values
+    }
+
+    while (true) {
+        // Check for convergence (all off-diagonal elements small enough)
+        bool converged = true;
+        for (int i = 0; i < n - 1; i++) {
+            if (fabs(e[i]) > EPSILON) {
+                converged = false;
+                break;
+            }
+        }
+        if (converged) break;
+
+        // Wilkinson shift
+        double mu = singular_values[n - 1] * singular_values[n - 1];
+        for (int i = 0; i < n - 1; i++) {
+            double t = (singular_values[i] * singular_values[i]) - mu;
+            double s = sqrt(t * t + e[i] * e[i]);
+            double c = t / s;
+            double s_rot = e[i] / s;
+
+            // Apply Givens rotation
+            double temp = singular_values[i] * c + e[i] * s_rot;
+            e[i] = -singular_values[i] * s_rot + e[i] * c;
+            singular_values[i] = temp;
+        }
+    }
+}
+
+// Extract bidiagonal components from h_result
+void extract_bidiagonal(double *h_result, double *d, double *e, int m, int n) {
+    for (int i = 0; i < m; i++) {
+        d[i] = h_result[i * n + i]; // Main diagonal
+        if (i < m - 1) {
+            e[i] = h_result[i * n + i + 1]; // Superdiagonal
+        }
+    }
+}
+
+// Function to return singular values
+vector<double> get_singular_values(double *h_result, int m, int n) {
+    double *d = new double[m];
+    double *e = new double[m - 1];
+    vector<double> singular_values(m);
+
+    extract_bidiagonal(h_result, d, e, m, n);
+    compute_singular_values(d, e, m, singular_values);
+
+    delete[] d;
+    delete[] e;
+    return singular_values;
+}
+
+int main() {
+    // Small 5D tensor (2x2x2x2x2)
+    const int N = 2;
+    const int total_size = N * N * N * N * N; // 32 elements
+    
+    // Create and initialize tensor on host
+    double* h_tensor = new double[total_size];
+    mt19937 gen(42); // Fixed seed for reproducibility
+    normal_distribution<double> dist(0.0, 1.0);
+    
+    for (int i = 0; i < total_size; i++) {
+        h_tensor[i] = dist(gen);
+    }
+    
+    // Mode-1 unfolding: (2, 16)
+    int m = N;
+    int n = N * N * N * N;
+    
+    // Print original matrix (first few elements)
+    cout << "Original matrix (first few elements):" << endl;
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < min(5, n); j++) {
+            cout << fixed << setprecision(4) << h_tensor[i * n + j] << " ";
+        }
+        cout << endl;
+    }
+    
+    // Make a copy of the original for verification
+    double* h_A_copy = new double[m * n];
+    memcpy(h_A_copy, h_tensor, m * n * sizeof(double));
+    
+    // Allocate device memory
+    double *d_A, *d_U, *d_V;
+    cudaMalloc(&d_A, m * n * sizeof(double));
+    cudaMalloc(&d_U, m * m * sizeof(double));
+    cudaMalloc(&d_V, n * n * sizeof(double));
+    
+    // Copy data to device
+    cudaMemcpy(d_A, h_tensor, m * n * sizeof(double), cudaMemcpyHostToDevice);
+    
+    // Run bidiagonalization
+    householderBidiagonalizationCUDA(d_A, d_U, d_V, m, n, n, m, n);
+    
+    // Copy results back
+    double* h_result = new double[m * n];
+    double* h_U = new double[m * m];
+    double* h_V = new double[n * n];
+    
+    cudaMemcpy(h_result, d_A, m * n * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_U, d_U, m * m * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_V, d_V, n * n * sizeof(double), cudaMemcpyDeviceToHost);
+     
+    // Print bidiagonal matrix (should only have nonzeros on diagonal and superdiagonal)
+    cout << "\nBidiagonal matrix result:" << endl;
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < min(5, n); j++) {
+            cout << fixed << setprecision(4) << h_result[i * n + j] << " ";
+        }
+        cout << endl;
+    }
+
+    vector<double> singular_values = get_singular_values(h_result, m, n);
+
+    for(double s_value: singular_values) cout<<s_value<<" ";
+
+    // Verify U is orthogonal by checking U*U^T
+    cout << "\nVerifying U is orthogonal (U*U^T):" << endl;
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < m; j++) {
+            double sum = 0.0;
+            for (int k = 0; k < m; k++) {
+                sum += h_U[i * m + k] * h_U[j * m + k];
+            }
+            cout << fixed << setprecision(4) << sum << " ";
+        }
+        cout << endl;
+    }
+    
+    // Print part of U matrix
+    cout << "\nU matrix:" << endl;
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < m; j++) {
+            cout << fixed << setprecision(4) << h_U[i * m + j] << " ";
+        }
+        cout << endl;
+    }
+    
+    // Print part of V matrix (just first few columns)
+    cout << "\nV matrix (first few columns):" << endl;
+    for (int i = 0; i < min(3, n); i++) {
+        for (int j = 0; j < min(3, n); j++) {
+            cout << fixed << setprecision(4) << h_V[i * n + j] << " ";
+        }
+        cout << endl;
+    }
+    
+    // Clean up
+    delete[] h_tensor;
+    delete[] h_A_copy;
+    delete[] h_result;
+    delete[] h_U;
+    delete[] h_V;
+    cudaFree(d_A);
+    cudaFree(d_U);
+    cudaFree(d_V);
+    
+    return 0;
+}
