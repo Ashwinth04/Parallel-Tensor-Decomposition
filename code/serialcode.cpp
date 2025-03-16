@@ -4,6 +4,7 @@
 #include <xtensor/xmath.hpp>
 #include <xtensor/xio.hpp>
 #include <xtensor/xrandom.hpp>
+#include <xtensor/xview.hpp>
 #include <bits/stdc++.h>
 #include <chrono>
 
@@ -11,7 +12,51 @@ using namespace std;
 using namespace xt;
 using namespace chrono;
 
-#define N 11
+#define N 10
+
+const double S_min = 10.0, S_max = 200.0;   // Stock price range
+const double sigma_min = 0.1, sigma_max = 1.0;  // Volatility range
+const double r_min = 0.01, r_max = 0.1;   // Interest rate range
+const double T = 1.0;  // Time to maturity (1 year)
+const double K_min = 50.0, K_max = 150.0;  // Strike price range
+
+const int S_steps = N, sigma_steps = N, r_steps = N, t_steps = N, K_steps = N; // Grid resolution
+const double dt = T / (t_steps - 1);  // Time step
+
+// Function to initialize Black-Scholes discretized tensor
+xarray<double> discretizeBlackScholes() 
+{
+    xarray<double> tensor = zeros<double>({S_steps, sigma_steps, r_steps, t_steps, K_steps});
+
+    // Define grid points
+    xarray<double> S_grid = linspace(S_min, S_max, S_steps);
+    xarray<double> sigma_grid = linspace(sigma_min, sigma_max, sigma_steps);
+    xarray<double> r_grid = linspace(r_min, r_max, r_steps);
+    xarray<double> t_grid = linspace(static_cast<double>(0), T, t_steps);
+    xarray<double> K_grid = linspace(K_min, K_max, K_steps);
+
+    // Discretization using explicit finite difference method
+    for (int s = 1; s < S_steps - 1; s++) {
+        for (int v = 1; v < sigma_steps - 1; v++) {
+            for (int r = 1; r < r_steps - 1; r++) {
+                for (int t = 1; t < t_steps - 1; t++) {
+                    for (int k = 1; k < K_steps - 1; k++) {
+                        double S = S_grid[s], sigma = sigma_grid[v], r_val = r_grid[r], K = K_grid[k];
+
+                        double dS = (S_max - S_min) / (S_steps - 1);
+                        double dVdt = (tensor(s, v, r, t + 1, k) - tensor(s, v, r, t - 1, k)) / (2 * dt);
+                        double dVdS = (tensor(s + 1, v, r, t, k) - tensor(s - 1, v, r, t, k)) / (2 * dS);
+                        double d2VdS2 = (tensor(s + 1, v, r, t, k) - 2 * tensor(s, v, r, t, k) + tensor(s - 1, v, r, t, k)) / (dS * dS);
+
+                        tensor(s, v, r, t, k) = dVdt + 0.5 * sigma * sigma * S * S * d2VdS2 + r_val * S * dVdS - r_val * tensor(s, v, r, t, k);
+                    }
+                }
+            }
+        }
+    }
+    return tensor;
+}
+
 
 
 double vectorNorm(xarray<double>& v) {
@@ -237,6 +282,8 @@ int main() {
     // Generate a random 5D tensor
     auto start = high_resolution_clock::now();
     xarray<double> A = random::randn<double>({N, N, N, N, N});
+
+    // xarray<double> A = discretizeBlackScholes();
 
     // Unfold the tensor along a mode (example: mode-2 to mode-5)
     xarray<double> unfolded = unfold(A, 2, 5);

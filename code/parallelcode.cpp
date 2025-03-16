@@ -12,7 +12,7 @@ using namespace std;
 using namespace xt;
 using namespace chrono;
 
-#define N 11
+#define N 10
 #define NUM_THREADS 4
 
 
