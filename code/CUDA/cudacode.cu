@@ -64,7 +64,7 @@ void matrixMultiplyCUDA(double* d_A, double* d_B, double* d_C, int m, int k, int
         (m + blockDim.y - 1) / blockDim.y
     );
 
-    printf("Grid dimension: %d, Block dimension: %d",256, ((n + blockDim.x - 1) / blockDim.x) * ((m + blockDim.y - 1) / blockDim.y));
+    // printf("Grid dimension: %d, Block dimension: %d",256, ((n + blockDim.x - 1) / blockDim.x) * ((m + blockDim.y - 1) / blockDim.y));
     matrixMultiply<<<gridDim, blockDim>>>(d_A, d_B, d_C, m, k, n);
 
     cudaDeviceSynchronize();
@@ -328,6 +328,63 @@ int deltaTruncatedSVDCUDA(double* d_A, double* d_U, double* d_S, double* d_V, do
     return k;
 }
 
+vector<double*> TT_SVD(double* h_tensor, int size, double epsilon,int N)
+{
+    double* d_tensor;
+    cudaMalloc(&d_tensor, size * sizeof(double));
+    cudaMemcpy(d_tensor, h_tensor, size * sizeof(double), cudaMemcpyHostToDevice);
+
+    double norm = frobeniusNormCUDA(d_tensor, size);
+
+    double delta = (epsilon/2) *  norm;
+
+    cout<<"Delta = "<<delta<<endl;
+
+    vector<int> r(6,8);
+    r[0] = 1;
+    vector<double*> cores;
+    int m = N;
+    int n = pow(N,4);
+
+    double *d_A, *d_U, *d_S, *d_V;
+    cudaMalloc(&d_A, m * n * sizeof(double));
+    cudaMalloc(&d_U, m * m * sizeof(double));
+    cudaMalloc(&d_S, m * n * sizeof(double));
+    cudaMalloc(&d_V, n * n * sizeof(double));
+    
+
+    double *d_U_trunc, *d_S_trunc, *d_V_trunc;
+    cudaMalloc(&d_U_trunc, m * m * sizeof(double));
+    cudaMalloc(&d_S_trunc, m * n * sizeof(double));
+    cudaMalloc(&d_V_trunc, n * n * sizeof(double));
+    
+    // Copy data to device
+    cudaMemcpy(d_A, h_tensor, m * n * sizeof(double), cudaMemcpyHostToDevice);
+
+    int rank = -1;
+
+    for(int k=1; k<=4; k++)
+    {
+        rank = deltaTruncatedSVDCUDA(d_A, d_U, d_S, d_V, d_U_trunc, d_S_trunc, d_V_trunc, m, n, delta, rank);
+        
+        // Correct memory allocation (remove sizeof(double) multiplication)
+        double *G = new double[m*m];
+        
+        // Add error checking for cudaMemcpy
+        cudaError_t err = cudaMemcpy(G, d_U_trunc, m*m*sizeof(double), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            cout << "CUDA memory copy failed: " << cudaGetErrorString(err) << endl;
+            delete[] G;  // Clean up in case of error
+            continue;  // Skip this iteration
+        }
+        
+        cores.push_back(G);
+        cout << "Core " << k << " added. Cores vector size: " << cores.size() << endl;
+    }
+    
+    return cores;
+}
+
 int main() {
     // Small 5D tensor (2x2x2x2x2)
     const int N = 2;
@@ -336,7 +393,7 @@ int main() {
     // Create and initialize tensor on host
     double* h_tensor = new double[total_size];
     mt19937 gen(42); // Fixed seed for reproducibility
-    normal_distribution<double> dist(0.0, 1.0);
+    normal_distribution<double> dist(10.0, 1.0);
     
     for (int i = 0; i < total_size; i++) {
         h_tensor[i] = dist(gen);
@@ -355,62 +412,65 @@ int main() {
         cout << endl;
     }
     
-    // Make a copy of the original for verification
-    double* h_A_copy = new double[m * n];
-    memcpy(h_A_copy, h_tensor, m * n * sizeof(double));
+    vector<double*> cores = TT_SVD(h_tensor,m*n,0.001,N);
+    cout<<"Number of cores = "<<cores.size();
 
-    double *d_A, *d_U, *d_S, *d_V;
-    cudaMalloc(&d_A, m * n * sizeof(double));
-    cudaMalloc(&d_U, m * m * sizeof(double));
-    cudaMalloc(&d_S, m * n * sizeof(double));
-    cudaMalloc(&d_V, n * n * sizeof(double));
+    // // Make a copy of the original for verification
+    // double* h_A_copy = new double[m * n];
+    // memcpy(h_A_copy, h_tensor, m * n * sizeof(double));
+
+    // double *d_A, *d_U, *d_S, *d_V;
+    // cudaMalloc(&d_A, m * n * sizeof(double));
+    // cudaMalloc(&d_U, m * m * sizeof(double));
+    // cudaMalloc(&d_S, m * n * sizeof(double));
+    // cudaMalloc(&d_V, n * n * sizeof(double));
     
 
-    double *d_U_trunc, *d_S_trunc, *d_V_trunc;
-    cudaMalloc(&d_U_trunc, m * m * sizeof(double));
-    cudaMalloc(&d_S_trunc, m * n * sizeof(double));
-    cudaMalloc(&d_V_trunc, n * n * sizeof(double));
+    // double *d_U_trunc, *d_S_trunc, *d_V_trunc;
+    // cudaMalloc(&d_U_trunc, m * m * sizeof(double));
+    // cudaMalloc(&d_S_trunc, m * n * sizeof(double));
+    // cudaMalloc(&d_V_trunc, n * n * sizeof(double));
     
-    // Copy data to device
-    cudaMemcpy(d_A, h_tensor, m * n * sizeof(double), cudaMemcpyHostToDevice);
+    // // Copy data to device
+    // cudaMemcpy(d_A, h_tensor, m * n * sizeof(double), cudaMemcpyHostToDevice);
 
-    double delta = 0.5;
+    // double delta = 0.5;
 
-    int rank = -1;
+    // int rank = -1;
 
 
-    std::cout << "Running delta-truncated SVD..." << std::endl;
-    rank = deltaTruncatedSVDCUDA(d_A, d_U, d_S, d_V, d_U_trunc, d_S_trunc, d_V_trunc, m, n, delta, rank);
+    // std::cout << "Running delta-truncated SVD..." << std::endl;
+    // rank = deltaTruncatedSVDCUDA(d_A, d_U, d_S, d_V, d_U_trunc, d_S_trunc, d_V_trunc, m, n, delta, rank);
 
-    double* h_S_trunc = new double[m*n*sizeof(double)];
-    cudaMemcpy(h_S_trunc, d_S_trunc, m*n * sizeof(double), cudaMemcpyDeviceToHost);
+    // double* h_S_trunc = new double[m*n*sizeof(double)];
+    // cudaMemcpy(h_S_trunc, d_S_trunc, m*n * sizeof(double), cudaMemcpyDeviceToHost);
 
-    std::cout << "Truncated singular values: ";
-    for (int i = 0; i < rank; i++) {
-        std::cout << h_S_trunc[i*m + i] << " ";
-    }
-    cout<<endl;
+    // std::cout << "Truncated singular values: ";
+    // for (int i = 0; i < rank; i++) {
+    //     std::cout << h_S_trunc[i*m + i] << " ";
+    // }
+    // cout<<endl;
 
-    double* h_U_trunc;
-    double* h_V_trunc;
+    // double* h_U_trunc;
+    // double* h_V_trunc;
 
-    h_U_trunc = new double[m*m*sizeof(double)];
-    h_V_trunc = new double[n*n*sizeof(double)];
+    // h_U_trunc = new double[m*m*sizeof(double)];
+    // h_V_trunc = new double[n*n*sizeof(double)];
 
-    cudaMemcpy(h_U_trunc,d_U_trunc, m*m*sizeof(double),cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_V_trunc,d_V_trunc, n*n*sizeof(double), cudaMemcpyDeviceToHost);
+    // cudaMemcpy(h_U_trunc,d_U_trunc, m*m*sizeof(double),cudaMemcpyDeviceToHost);
+    // cudaMemcpy(h_V_trunc,d_V_trunc, n*n*sizeof(double), cudaMemcpyDeviceToHost);
 
-    for(int i=0;i<m*m;i++)
-    {
-       cout<<h_U_trunc[i]<<" ";
-    }
+    // for(int i=0;i<m*m;i++)
+    // {
+    //    cout<<h_U_trunc[i]<<" ";
+    // }
 
-    cout<<endl;
+    // cout<<endl;
     
-    for(int i=0;i<n*n;i++)
-    {
-      cout<<h_V_trunc[i]<<" ";
-    }
+    // for(int i=0;i<n*n;i++)
+    // {
+    //   cout<<h_V_trunc[i]<<" ";
+    // }
     
     // Run bidiagonalization
     // householderBidiagonalizationCUDA(d_A, d_U, d_V, m, n, n, m, n);

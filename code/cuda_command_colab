@@ -1,2 +1,0 @@
-!nvcc -I /usr/local/cuda/samples/common/inc/ -L/usr/local/cuda/include -lcublas -lcusolver -gencode arch=compute_75,code=sm_75 cudacode.cu kernels.cu
-!./a.out
