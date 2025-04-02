@@ -9,17 +9,15 @@ __global__ void vectorNorm(double *a, double *result, int size) {
     int cacheIndex = threadIdx.x;
     double temp = 0.0;
 
-    // Each thread accumulates part of the array
+
     while(tid < size) {
         temp += a[tid] * a[tid];
         tid += blockDim.x * gridDim.x;
     }
 
-    // Store partial sum in shared memory
     cache[cacheIndex] = temp;
     __syncthreads();
 
-    // Parallel reduction in shared memory
     int i = blockDim.x / 2;
     while (i != 0) {
         if (cacheIndex < i) {
@@ -29,7 +27,6 @@ __global__ void vectorNorm(double *a, double *result, int size) {
         i /= 2;
     }
 
-    // Only one thread per block adds its result to global result
     if (cacheIndex == 0) {
         atomicAdd(result, cache[0]);
     }
@@ -164,7 +161,6 @@ __global__ void copyColumn(double* src, double* dst, int m_src, int m_dst, int s
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (i < m_src && i < m_dst) {
-        // Copy src(i, src_col) to dst(i, dst_col)
         dst[i * ld_dst + dst_col] = src[i * ld_src + src_col];
     }
 }
@@ -174,7 +170,6 @@ __global__ void copyRow(double* src, double* dst, int n_src, int n_dst, int src_
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (j < n_src && j < n_dst) {
-        // Copy src(src_row, j) to dst(dst_row, j)
         dst[dst_row * ld_dst + j] = src[src_row * ld_src + j];
     }
 }
@@ -185,7 +180,6 @@ __global__ void initIdentityMatrix(double* M, int dim, int ldM) {
 
     if (i < dim) {
         for (int j = 0; j < dim; ++j) {
-            // Set diagonal element to 1, others to 0
             M[i * ldM + j] = (i == j) ? 1.0 : 0.0;
         }
     }
